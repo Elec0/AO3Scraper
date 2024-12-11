@@ -71,6 +71,10 @@ def get_args():
     parser.add_argument(
         '--tag_csv', default='',
         help='provide an optional list of tags; the retrieved fics must have one or more such tags')
+    parser.add_argument(
+        "--start_page", default=1,
+        help="start page number (default 1)"
+    )
 
     args = parser.parse_args()
     url = args.url
@@ -95,9 +99,7 @@ def get_args():
             for row in tags_reader:
                 tags.append(row[0])
 
-    header_info = str(args.header)
-
-    return header_info
+    return args
 
 # 
 # navigate to a works listed page,
@@ -150,7 +152,9 @@ def get_stats(header_info='') -> list[tuple]:
             seen_ids.add(id)
             chaps, words, kudos, title = get_work_stats(work)
             
-            if (words <= 5000):
+            if (words == -1):
+                print(f"Hit a fic with no word count")
+            elif (words <= 5000):
                 print(f"Hit a fic with less than 5000 words, stopping search.")
                 break
 
@@ -164,11 +168,46 @@ def get_work_stats(work: ResultSet) -> tuple:
     kudos_sel = work.find('dd', class_="kudos")
     title_sel = work.find('h4', class_="heading").find('a')
     
-    chapters = int(chaps_sel.text.split('/')[0].replace(',', ''))
-    words = int(words_sel.text.replace(',', ''))
-    kudos = int(kudos_sel.text.replace(',', ''))
-    title = title_sel.text.strip()
+    try:
+        title = title_sel.text.strip()
+    except:
+        print("Error: could not find title.")
+        title = "No title found"
+
+    try:
+        chapters = int(chaps_sel.text.split('/')[0].replace(',', ''))
+    except:
+        print("Error: could not find chapter count.")
+        chapters = -1
+    try:
+        words = int(words_sel.text.replace(',', ''))
+    except:
+        print("Error: could not find word count.")
+        words = -1
+    try:
+        kudos = int(kudos_sel.text.replace(',', ''))
+    except:
+        print("Error: could not find kudos count.")
+        kudos = -1
+        
     return chapters, words, kudos, title
+
+def update_url_to_page(page: int):
+    global url
+    key = "page="
+    start = url.find(key)
+    if (start != -1):
+        page_start_index = start + len(key)
+        page_end_index = url.find("&", page_start_index)
+        if (page_end_index != -1):
+            url = url[:page_start_index] + str(page) + url[page_end_index:]
+        else:
+            url = url[:page_start_index] + str(page)
+    else:
+        if (url.find("?") != -1):
+            url = url + "&page=" + str(page)
+        else:
+            url = url + "?page=" + str(page)
 
 # 
 # update the url to move to the next page
@@ -229,8 +268,8 @@ def write_stats_to_csv(all_stats: list[tuple]):
     global num_recorded_fic
     with open(csv_name + ".csv", 'a', newline="", encoding="utf-8") as csvfile:
         wr = csv.writer(csvfile, delimiter=',')
-        if (len(all_stats) > 0):
-            wr.writerow(["id", "chapters", "words", "kudos", "title"])
+        # if (len(all_stats) > 0):
+            # wr.writerow(["id", "chapters", "words", "kudos", "title"])
 
         for stats in all_stats:
             # wr.writerow(stats + (url,))
@@ -303,13 +342,16 @@ def load_existing_ids():
 
 def main():
     global start_time
-    header_info = get_args()
+    args = get_args()
+    header_info = str(args.header)
     # make_readme()
 
     # print ("loading existing file ...\n")
     # load_existing_ids()
 
     print("processing...\n")
+
+    update_url_to_page(int(args.start_page))
 
     start_time = time.time()
     process_for_ids(header_info)
