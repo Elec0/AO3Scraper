@@ -7,7 +7,7 @@
 # Modify search to include a list of tags
 #      (e.g. you want all fics tagged either "romance" or "fluff")
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, ResultSet
 import re
 import time
 import requests
@@ -102,7 +102,13 @@ def get_args():
 # navigate to a works listed page,
 # then extract all work ids
 # 
-def get_ids(header_info=''):
+def get_stats(header_info='') -> list[tuple]:
+    """
+    Get the stats for each work on the page
+
+    :return: list of tuples, each containing the stats for a work
+    in the form (id, chapters, words, kudos, title)
+    """
     global page_empty
     global seen_ids
 
@@ -111,39 +117,53 @@ def get_ids(header_info=''):
     req = requests.get(url, headers=headers)
     while req.status_code == 429:
         # >5 second delay between requests as per AO3's terms of service
+        print("Request answered with Status-Code 429, retrying...")
         time.sleep(10)
         req = requests.get(url, headers=headers)
-        print("Request answered with Status-Code 429, retrying...")
 
     soup = BeautifulSoup(req.text, "lxml")
 
     # some responsiveness in the "UI"
-    sys.stdout.write('.')
-    sys.stdout.flush()
+    # sys.stdout.write('.')
+    # sys.stdout.flush()
+    # Each of the works is the whole story 'box'
     works = soup.select("li.work.blurb.group")
     # see if we've gone too far and run out of fic: 
     if (len(works) == 0):
         page_empty = True
 
     # process list for new fic ids
+    # We only want to process multichapter fics, and we're assuming
+    # that the list is ordered by word count, so we can stop when we hit the first
+    # single-chapter fic. It might miss *some* really short multichapter fics, but
+    # whatever.
     ids = []
-    for tag in works:
-        if (multichap_only):
-            # FOR MULTICHAP ONLY
-            chaps = tag.find('dd', class_="chapters")
-            if (chaps.text != u"1/1"):
-                t = tag.get('id')
-                t = t[5:]
-                if not t in seen_ids:
-                    ids.append(t)
-                    seen_ids.add(t)
-        else:
-            t = tag.get('id')
-            t = t[5:]
-            if not t in seen_ids:
-                ids.append(t)
-                seen_ids.add(t)
-    return ids
+    stats = []
+    for work in works:
+        chaps = work.find('dd', class_="chapters")
+        if (chaps.text == u"1/1"):
+            print("Finished processing multichapter fics, skipping all single chapters fics.")
+            break
+
+        id = work.get('id')
+        id = id[5:]
+        if not id in seen_ids:
+            ids.append(id)
+            seen_ids.add(id)
+            stats.append((id,) + get_work_stats(work))
+    return stats
+
+def get_work_stats(work: ResultSet) -> tuple:
+    chaps_sel = work.find('dd', class_="chapters")
+    words_sel = work.find('dd', class_="words")
+    kudos_sel = work.find('dd', class_="kudos")
+    title_sel = work.find('h4', class_="heading").find('a')
+    
+    chapters = int(chaps_sel.text.split('/')[0])
+    words = int(words_sel.text.replace(',', ''))
+    kudos = int(kudos_sel.text.replace(',', ''))
+    title = title_sel.text.strip()
+    return chapters, words, kudos, title
 
 # 
 # update the url to move to the next page
@@ -197,14 +217,17 @@ def add_tag_to_url(tag):
 # include the url where it was found,
 # so an interrupted search can be restarted
 # 
-def write_ids_to_csv(ids):
+def write_stats_to_csv(all_stats: list[tuple]):
     global num_recorded_fic
     with open(csv_name + ".csv", 'a', newline="") as csvfile:
         wr = csv.writer(csvfile, delimiter=',')
-        for id in ids:
+        wr.writerow(["id", "chapters", "words", "kudos", "title"])
+        for stats in all_stats:
             if (not_finished()):
-                wr.writerow([id, url])
+                # wr.writerow(stats + (url,))
+                wr.writerow(stats)
                 num_recorded_fic = num_recorded_fic + 1
+                print(f"Title: {stats[-1]}, Chapters: {stats[1]}, Words: {stats[2]}, Kudos: {stats[3]}")
             else:
                 break
 
@@ -244,11 +267,11 @@ def reset():
 
 def process_for_ids(header_info=''):
     while(not_finished()):
+        stats = get_stats(header_info)
+        write_stats_to_csv(stats) # Remove the URL
+        update_url_to_next_page()
         # 5 second delay between requests as per AO3's terms of service
         time.sleep(5)
-        ids = get_ids(header_info)
-        write_ids_to_csv(ids)
-        update_url_to_next_page()
 
 def load_existing_ids():
     global seen_ids
@@ -264,13 +287,12 @@ def load_existing_ids():
 
 def main():
     header_info = get_args()
-    make_readme()
+    # make_readme()
 
-    print ("loading existing file ...\n")
-    load_existing_ids()
+    # print ("loading existing file ...\n")
+    # load_existing_ids()
 
     print("processing...\n")
-
 
     if (len(tags)):
         for t in tags:
